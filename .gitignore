@@ -1,0 +1,51 @@
+# === Node / Next.js ===
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.production.local
+frontend/.env.test.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.turbo/
+
+# === Python / FastAPI ===
+backend/__pycache__/
+backend/*.pyc
+backend/*.pyo
+backend/*.pyd
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.venv/
+backend/venv/
+backend/env/
+backend/.env
+backend/.coverage
+backend/coverage.xml
+
+# === Docker ===
+# Ignore only local override files (safe)
+docker-compose.override.yml
+
+
+# === General ===
+*.log
+*.DS_Store
+*.swp
+*.swo
+Thumbs.db
+
+# === VSCode / IDE ===
+.vscode/
+.idea/
+
+# === Build / Cache ===
+dist/
+build/
+.cache/
+
+# === Environment & Config ===
+.env
+.env.*
