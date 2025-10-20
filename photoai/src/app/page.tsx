@@ -7,18 +7,50 @@ import { Upload, Sparkles, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
+interface FoodItem {
+  name: string;
+  confidence: number;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+}
+
+interface AnalysisResult {
+  success: boolean;
+  filename: string;
+  size_bytes: number;
+  analysis: {
+    detected_foods: FoodItem[];
+    total_nutrition: {
+      calories: number;
+      protein_g: number;
+      carbs_g: number;
+      fat_g: number;
+    };
+    processing_time_ms: number;
+    model_version: string;
+  };
+}
+
 export default function FoodRecognizer() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleFileSelect = (file: File) => {
     if (file && file.type.startsWith("image/")) {
+      setSelectedFile(file);
       const reader = new FileReader();
       reader.onload = (e) => {
         setSelectedImage(e.target?.result as string);
       };
       reader.readAsDataURL(file);
+      setAnalysisResult(null);
+      setError(null);
     }
   };
 
@@ -46,17 +78,42 @@ export default function FoodRecognizer() {
     setIsDragging(false);
   };
 
-  const handleAnalyze = () => {
+  const handleAnalyze = async () => {
+    if (!selectedFile) return;
+
     setIsAnalyzing(true);
-    // Placeholder for future AI integration
-    setTimeout(() => {
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      const response = await fetch('/api/analyze-food', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to analyze image');
+      }
+
+      setAnalysisResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+      console.error('Analysis error:', err);
+    } finally {
       setIsAnalyzing(false);
-    }, 2000);
+    }
   };
 
   const handleReset = () => {
     setSelectedImage(null);
+    setSelectedFile(null);
     setIsAnalyzing(false);
+    setAnalysisResult(null);
+    setError(null);
   };
 
   return (
@@ -141,7 +198,14 @@ export default function FoodRecognizer() {
                 />
               </div>
 
-              {/* Results Placeholder */}
+              {/* Error Message */}
+              {error && (
+                <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                  <p className="text-red-800 dark:text-red-200 text-sm">{error}</p>
+                </div>
+              )}
+
+              {/* Results */}
               <div className="bg-secondary/50 rounded-lg p-6 border border-border">
                 <div className="flex items-center gap-2 mb-4">
                   <Sparkles className="h-5 w-5 text-accent" />
@@ -156,10 +220,63 @@ export default function FoodRecognizer() {
                       Analyzing your image...
                     </p>
                   </div>
+                ) : analysisResult ? (
+                  <div className="space-y-4">
+                    <div className="space-y-3">
+                      {analysisResult.analysis.detected_foods.map((food, index) => (
+                        <div key={index} className="bg-background rounded-lg p-4">
+                          <div className="flex justify-between items-start mb-2">
+                            <h4 className="font-medium text-foreground">{food.name}</h4>
+                            <span className="text-sm text-muted-foreground">
+                              {(food.confidence * 100).toFixed(0)}% confidence
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-4 gap-2 text-sm">
+                            <div>
+                              <p className="text-muted-foreground">Calories</p>
+                              <p className="font-medium">{food.calories}</p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">Protein</p>
+                              <p className="font-medium">{food.protein_g}g</p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">Carbs</p>
+                              <p className="font-medium">{food.carbs_g}g</p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">Fat</p>
+                              <p className="font-medium">{food.fat_g}g</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="bg-primary/10 rounded-lg p-4">
+                      <h4 className="font-semibold mb-2 text-foreground">Total Nutrition</h4>
+                      <div className="grid grid-cols-4 gap-2 text-sm">
+                        <div>
+                          <p className="text-muted-foreground">Calories</p>
+                          <p className="font-bold text-primary">{analysisResult.analysis.total_nutrition.calories}</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Protein</p>
+                          <p className="font-bold text-primary">{analysisResult.analysis.total_nutrition.protein_g}g</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Carbs</p>
+                          <p className="font-bold text-primary">{analysisResult.analysis.total_nutrition.carbs_g}g</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground">Fat</p>
+                          <p className="font-bold text-primary">{analysisResult.analysis.total_nutrition.fat_g}g</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
                   <p className="text-muted-foreground">
-                    Click "Analyze" to identify the food in your image. AI
-                    integration coming soon!
+                    Click "Analyze" to identify the food in your image
                   </p>
                 )}
               </div>
@@ -167,7 +284,7 @@ export default function FoodRecognizer() {
               <div className="flex gap-3">
                 <Button
                   onClick={handleAnalyze}
-                  disabled={isAnalyzing}
+                  disabled={isAnalyzing || !selectedFile}
                   size="lg"
                   className="flex-1"
                 >
