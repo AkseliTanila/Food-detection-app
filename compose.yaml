@@ -1,0 +1,33 @@
+services:
+  backend:
+    build: ./backend
+    container_name: backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    networks:
+      - app-network
+
+  frontend:
+    build: ./photoai
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_NO_WARNINGS=1
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+      - NEXT_TELEMETRY_DISABLED=1
+    volumes:
+    - ./photoai:/app
+    - /app/node_modules
+
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
