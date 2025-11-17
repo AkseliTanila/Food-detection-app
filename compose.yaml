@@ -4,6 +4,10 @@ services:
     container_name: backend
     ports:
       - "8000:8000"
+    environment:
+      - NUTRITION_PROVIDER=fatsecret
+      - FATSECRET_CLIENT_ID=${FATSECRET_CLIENT_ID}
+      - FATSECRET_CLIENT_SECRET=${FATSECRET_CLIENT_SECRET}
     volumes:
       - ./backend:/app
     networks:

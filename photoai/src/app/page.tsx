@@ -10,10 +10,10 @@ import { Card } from "@/components/ui/card";
 interface FoodItem {
   name: string;
   confidence: number;
-  calories: number;
-  protein_g: number;
-  carbs_g: number;
-  fat_g: number;
+  calories?: number;
+  protein_g?: number;
+  carbs_g?: number;
+  fat_g?: number;
 }
 
 interface AnalysisResult {
@@ -22,12 +22,13 @@ interface AnalysisResult {
   size_bytes: number;
   analysis: {
     detected_foods: FoodItem[];
-    total_nutrition: {
+    total_nutrition?: {
       calories: number;
       protein_g: number;
       carbs_g: number;
       fat_g: number;
     };
+    nutrition_estimates?: any[];
     processing_time_ms: number;
     model_version: string;
   };
@@ -223,40 +224,62 @@ export default function FoodRecognizer() {
                 ) : analysisResult ? (
                   <div className="space-y-4">
                     <div className="space-y-3">
-                      {analysisResult.analysis.detected_foods.map((food, index) => (
-                        <div key={index} className="bg-background rounded-lg p-4">
-                          <div className="flex justify-between items-start mb-2">
-                            <h4 className="font-medium text-foreground">{food.name}</h4>
-                            <span className="text-sm text-muted-foreground">
-                              {(food.confidence * 100).toFixed(0)}% confidence
-                            </span>
-                          </div>
+                      {analysisResult.analysis.detected_foods.map((food, index) => {
+                        // Try to match estimate by name first, otherwise fall back to the same index
+                        const estimates = analysisResult.analysis.nutrition_estimates ?? [];
+                        let estimate = estimates.find((n: any) => n.name === food.name);
+                        if (!estimate) {
+                          estimate = estimates[index];
+                        }
+                        const calories = food.calories ?? estimate?.nutrition?.calories;
+                        const protein = food.protein_g ?? estimate?.nutrition?.protein_g;
+                        const carbs = food.carbs_g ?? estimate?.nutrition?.carbs_g;
+                        const fat = food.fat_g ?? estimate?.nutrition?.fat_g;
 
-                          {/* Only show nutrition if available */}
-                          {food.calories ? (
-                            <div className="grid grid-cols-4 gap-2 text-sm">
-                              <div>
-                                <p className="text-muted-foreground">Calories</p>
-                                <p className="font-medium">{food.calories}</p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Protein</p>
-                                <p className="font-medium">{food.protein_g}g</p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Carbs</p>
-                                <p className="font-medium">{food.carbs_g}g</p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Fat</p>
-                                <p className="font-medium">{food.fat_g}g</p>
-                              </div>
+                        return (
+                          <div key={index} className="bg-background rounded-lg p-4">
+                            <div className="flex justify-between items-start mb-2">
+                              <h4 className="font-medium text-foreground">{food.name}</h4>
+                              <span className="text-sm text-muted-foreground">
+                                {(food.confidence * 100).toFixed(0)}% confidence
+                              </span>
                             </div>
-                          ) : (
-                            <p className="text-sm text-muted-foreground">Nutrition data not available</p>
-                          )}
-                        </div>
-                      ))}
+
+                            {/* Only show nutrition if available (from item or estimate) */}
+                            {calories != null ? (
+                              <>
+                                <div className="grid grid-cols-4 gap-2 text-sm">
+                                  <div>
+                                    <p className="text-muted-foreground">Calories</p>
+                                    <p className="font-medium">{calories}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Protein</p>
+                                    <p className="font-medium">{protein ?? "—"}g</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Carbs</p>
+                                    <p className="font-medium">{carbs ?? "—"}g</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Fat</p>
+                                    <p className="font-medium">{fat ?? "—"}g</p>
+                                  </div>
+                                </div>
+                                {(estimate?.nutrition?.serving_description || estimate?.nutrition?.source) && (
+                                  <p className="text-xs text-muted-foreground mt-2">
+                                    {estimate?.nutrition?.serving_description ? `Serving: ${estimate.nutrition.serving_description}` : null}
+                                    {estimate?.nutrition?.serving_description && estimate?.nutrition?.source ? ' • ' : null}
+                                    {estimate?.nutrition?.source ? `Source: ${estimate.nutrition.source}` : null}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">Nutrition data not available</p>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                     <div className="bg-primary/10 rounded-lg p-4">
                       <h4 className="font-semibold mb-2 text-foreground">Total Nutrition</h4>
@@ -295,6 +318,13 @@ export default function FoodRecognizer() {
                         )}
                       </div>
                     </div>
+                    {/* Debug: raw analysis object for troubleshooting */}
+                    <details className="mt-3 p-3 bg-muted/50 rounded">
+                      <summary className="cursor-pointer text-sm text-muted-foreground">Show raw analysis (debug)</summary>
+                      <pre className="text-xs overflow-auto mt-2 max-h-60 text-muted-foreground">
+                        {JSON.stringify(analysisResult.analysis, null, 2)}
+                      </pre>
+                    </details>
                   </div>
                 ) : (
                   <p className="text-muted-foreground">
