@@ -30,9 +30,6 @@ print("✅ Model loaded successfully.")
 # ==========================
 # Routes
 # ==========================
-@app.get("/")
-def read_root():
-    return {"message": "Hello from the Python backend!"}
 
 
 @app.post("/analyze-food")

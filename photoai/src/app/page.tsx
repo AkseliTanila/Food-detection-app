@@ -2,7 +2,7 @@
 
 import type React from "react";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Upload, Sparkles, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -38,8 +38,11 @@ export default function FoodRecognizer() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleFileSelect = (file: File) => {
     if (file && file.type.startsWith("image/")) {
@@ -53,14 +56,6 @@ export default function FoodRecognizer() {
       setError(null);
     }
   };
-
-  const [message, setMessage] = useState("Loading...");
-  useEffect(() => {
-    fetch("/api/")
-      .then((res) => res.json())
-      .then((data) => setMessage(data.message))
-      .catch(() => setMessage("Error connecting to backend"));
-  }, []);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -86,23 +81,23 @@ export default function FoodRecognizer() {
 
     try {
       const formData = new FormData();
-      formData.append('file', selectedFile);
+      formData.append("file", selectedFile);
 
-      const response = await fetch('/api/analyze-food', {
-        method: 'POST',
+      const response = await fetch("/api/analyze-food", {
+        method: "POST",
         body: formData,
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to analyze image');
+        throw new Error(data.error || "Failed to analyze image");
       }
 
       setAnalysisResult(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-      console.error('Analysis error:', err);
+      setError(err instanceof Error ? err.message : "An error occurred");
+      console.error("Analysis error:", err);
     } finally {
       setIsAnalyzing(false);
     }
@@ -134,9 +129,7 @@ export default function FoodRecognizer() {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-12 max-w-4xl">
         <div className="text-center mb-12">
-          <h2 className="text-4xl md:text-5xl font-bold mb-4 text-balance text-foreground">
-            {message}
-          </h2>
+          <h2 className="text-4xl md:text-5xl font-bold mb-4 text-balance text-foreground"></h2>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto text-pretty">
             Upload a photo and let our AI recognize what food it is. Get instant
             results with detailed information.
@@ -167,22 +160,26 @@ export default function FoodRecognizer() {
                     Drag and drop your image here, or click to browse
                   </p>
                 </div>
-                <label htmlFor="file-upload">
-                  <Button size="lg" className="cursor-pointer">
-                    <Upload className="mr-2 h-4 w-4" />
-                    Choose File
-                  </Button>
-                  <input
-                    id="file-upload"
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleFileSelect(file);
-                    }}
-                  />
-                </label>
+                <Button
+                  size="lg"
+                  type="button"
+                  className="cursor-pointer"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Choose File
+                </Button>
+                <input
+                  id="file-upload"
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleFileSelect(file);
+                  }}
+                />
                 <p className="text-xs text-muted-foreground">
                   Supports JPG, PNG, WEBP up to 10MB
                 </p>
@@ -201,7 +198,9 @@ export default function FoodRecognizer() {
               {/* Error Message */}
               {error && (
                 <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-4">
-                  <p className="text-red-800 dark:text-red-200 text-sm">{error}</p>
+                  <p className="text-red-800 dark:text-red-200 text-sm">
+                    {error}
+                  </p>
                 </div>
               )}
 
@@ -223,62 +222,90 @@ export default function FoodRecognizer() {
                 ) : analysisResult ? (
                   <div className="space-y-4">
                     <div className="space-y-3">
-                      {analysisResult.analysis.detected_foods.map((food, index) => (
-                        <div key={index} className="bg-background rounded-lg p-4">
-                          <div className="flex justify-between items-start mb-2">
-                            <h4 className="font-medium text-foreground">{food.name}</h4>
-                            <span className="text-sm text-muted-foreground">
-                              {(food.confidence * 100).toFixed(0)}% confidence
-                            </span>
-                          </div>
-
-                          {/* Only show nutrition if available */}
-                          {food.calories ? (
-                            <div className="grid grid-cols-4 gap-2 text-sm">
-                              <div>
-                                <p className="text-muted-foreground">Calories</p>
-                                <p className="font-medium">{food.calories}</p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Protein</p>
-                                <p className="font-medium">{food.protein_g}g</p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Carbs</p>
-                                <p className="font-medium">{food.carbs_g}g</p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">Fat</p>
-                                <p className="font-medium">{food.fat_g}g</p>
-                              </div>
+                      {analysisResult.analysis.detected_foods.map(
+                        (food, index) => (
+                          <div
+                            key={index}
+                            className="bg-background rounded-lg p-4"
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <h4 className="font-medium text-foreground">
+                                {food.name}
+                              </h4>
+                              <span className="text-sm text-muted-foreground">
+                                {(food.confidence * 100).toFixed(0)}% confidence
+                              </span>
                             </div>
-                          ) : (
-                            <p className="text-sm text-muted-foreground">Nutrition data not available</p>
-                          )}
-                        </div>
-                      ))}
+
+                            {/* Only show nutrition if available */}
+                            {food.calories ? (
+                              <div className="grid grid-cols-4 gap-2 text-sm">
+                                <div>
+                                  <p className="text-muted-foreground">
+                                    Calories
+                                  </p>
+                                  <p className="font-medium">{food.calories}</p>
+                                </div>
+                                <div>
+                                  <p className="text-muted-foreground">
+                                    Protein
+                                  </p>
+                                  <p className="font-medium">
+                                    {food.protein_g}g
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-muted-foreground">Carbs</p>
+                                  <p className="font-medium">{food.carbs_g}g</p>
+                                </div>
+                                <div>
+                                  <p className="text-muted-foreground">Fat</p>
+                                  <p className="font-medium">{food.fat_g}g</p>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">
+                                Nutrition data not available
+                              </p>
+                            )}
+                          </div>
+                        )
+                      )}
                     </div>
                     <div className="bg-primary/10 rounded-lg p-4">
-                      <h4 className="font-semibold mb-2 text-foreground">Total Nutrition</h4>
+                      <h4 className="font-semibold mb-2 text-foreground">
+                        Total Nutrition
+                      </h4>
                       <div className="grid grid-cols-4 gap-2 text-sm">
                         {analysisResult.analysis.total_nutrition ? (
                           <>
                             <div>
                               <p className="text-muted-foreground">Calories</p>
                               <p className="font-bold text-primary">
-                                {analysisResult.analysis.total_nutrition.calories}
+                                {
+                                  analysisResult.analysis.total_nutrition
+                                    .calories
+                                }
                               </p>
                             </div>
                             <div>
                               <p className="text-muted-foreground">Protein</p>
                               <p className="font-bold text-primary">
-                                {analysisResult.analysis.total_nutrition.protein_g}g
+                                {
+                                  analysisResult.analysis.total_nutrition
+                                    .protein_g
+                                }
+                                g
                               </p>
                             </div>
                             <div>
                               <p className="text-muted-foreground">Carbs</p>
                               <p className="font-bold text-primary">
-                                {analysisResult.analysis.total_nutrition.carbs_g}g
+                                {
+                                  analysisResult.analysis.total_nutrition
+                                    .carbs_g
+                                }
+                                g
                               </p>
                             </div>
                             <div>
