@@ -1,7 +1,13 @@
 fastapi
 uvicorn
 python-multipart
-torch
-torchvision
 pillow
-transformers
+requests
+# Use a pinned transformers release
+transformers==4.57.0
+huggingface-hub>=0.24.0
+accelerate
+bitsandbytes
+safetensors
+einops
+sentencepiece
