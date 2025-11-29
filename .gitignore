@@ -49,3 +49,7 @@ build/
 # === Environment & Config ===
 .env
 .env.*
+
+
+
+hf_cache
