@@ -48,7 +48,7 @@ build/
 
 # === Environment & Config ===
 .env
-
+.env.*
 
 
 
