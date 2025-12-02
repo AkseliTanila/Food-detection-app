@@ -21,13 +21,13 @@ services:
       # Load model in bitsandbytes 8-bit mode (recommended for 10GB VRAM)
       - LOAD_IN_8BIT=false
       # Generation hyperparameters (tweak if OOM)
-      - GEN_TOP_P=0.6
+      - GEN_TOP_P=0.8
       - GEN_TOP_K=10
-      - GEN_TEMPERATURE=0.25
+      - GEN_TEMPERATURE=0.4
       - GEN_REPETITION_PENALTY=1.0
       - GEN_PRESENCE_PENALTY=1.2
       # Keep this conservative to start — increase if you have memory headroom
-      - GEN_MAX_NEW_TOKENS=80
+      - GEN_MAX_NEW_TOKENS=120
       # Optional: enable remote inference fallback (set to "true" and provide HF_TOKEN)
       - USE_REMOTE_INFERENCE=false
       - HF_TOKEN=

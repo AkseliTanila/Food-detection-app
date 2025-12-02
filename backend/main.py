@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict
+from typing import Any, Dict, List, Optional
 import os
 import torch
 from PIL import Image
@@ -8,6 +8,7 @@ from transformers import AutoProcessor
 from transformers import Qwen3VLForConditionalGeneration
 from io import BytesIO
 import time
+import re
 
 app = FastAPI(title="Food Detection API", version="1.0.0")
 
@@ -20,26 +21,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load AI model once at startup. If a baked-in local path exists we prefer that
 LOCAL_MODEL_PATH = os.environ.get("QWEN_VL_LOCAL_PATH")
 DEFAULT_MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 resolved_local_path = LOCAL_MODEL_PATH if LOCAL_MODEL_PATH and os.path.isdir(LOCAL_MODEL_PATH) else None
 MODEL_NAME = resolved_local_path or os.environ.get("QWEN_VL_MODEL", DEFAULT_MODEL_ID)
 if resolved_local_path:
-    print(f"📦 Using preloaded Qwen weights at {resolved_local_path}")
+    print(f"Using preloaded Qwen weights at {resolved_local_path}")
 else:
-    print(f"🌐 Using Hugging Face repo {MODEL_NAME}")
+    print(f"Using Hugging Face repo {MODEL_NAME}")
 
-# Generation hyperparameters (defaults taken from Qwen3-VL recommendations)
+# Generation hyperparameters
 GEN_TOP_P = float(os.environ.get("GEN_TOP_P", 0.8))
 GEN_TOP_K = int(os.environ.get("GEN_TOP_K", 20))
-GEN_TEMPERATURE = float(os.environ.get("GEN_TEMPERATURE", 0.25))
+GEN_TEMPERATURE = float(os.environ.get("GEN_TEMPERATURE", 0.4))
 GEN_REPETITION_PENALTY = float(os.environ.get("GEN_REPETITION_PENALTY", 1.0))
 GEN_PRESENCE_PENALTY = float(os.environ.get("GEN_PRESENCE_PENALTY", 1.5))
-GEN_MAX_NEW_TOKENS = int(os.environ.get("GEN_MAX_NEW_TOKENS", 80))
+GEN_MAX_NEW_TOKENS = int(os.environ.get("GEN_MAX_NEW_TOKENS", 120))
 MAX_IMAGE_RESOLUTION = int(os.environ.get("MAX_IMAGE_RESOLUTION", 1024))
+DEFAULT_TEST_PHOTO_DIR = os.path.abspath(
+    os.environ.get(
+        "TEST_PHOTO_DIR",
+        os.path.join(os.path.dirname(__file__), "..", "photoai", "src", "app", "testPhotos")
+    )
+)
+SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+CONFIDENCE_REGEX = re.compile(r"confidence:\s*([0-9]+(?:\.[0-9]+)?)%", re.IGNORECASE)
 
-print("🔍 Trying to load the local model at startup (user requested). This may take a while and can OOM.")
+USER_PROMPT = (
+    "You are a food recognition model. Respond using exactly this template:\n"
+    "Dish: <concise name>\n"
+    "Ingredients: comma-separated list\n"
+    "Nutrition (per serving, approximate): Calories <number> kcal; Protein <number> g; Carbs <number> g; Fat <number> g\n"
+    "Confidence: <number>% (use 95-100 only when the dish is unmistakable; drop to 60-80 if multiple foods appear or plating is atypical; go below 60 when unsure). Never repeat the same confidence twice in a row across different photos. add or subtract from -2% to +2%\n"
+    "\n"
+    "Rules:\n"
+    "- Do NOT show any reasoning.\n"
+    "- Confidence must reflect visual certainty:\n"
+    "  * 95-100%: extremely obvious single food (banana, fried egg, pizza slice).\n"
+    "  * 80-94%: identifiable but has variations or partial occlusion.\n"
+    "  * 60-79%: mixed dishes with some ambiguity.\n"
+    "  * 30-59%: unclear angle or visually similar alternatives.\n"
+    "  * 0-29%: very high uncertainty.\n"
+    "- Nutrition numbers must vary between dishes and be realistic.\n"
+)
+
 processor = None
 model = None
 
@@ -60,7 +85,6 @@ def load_local_model():
         processor = AutoProcessor.from_pretrained(MODEL_NAME,torch_dtype=torch.float16,device_map="cuda")
 
 
-        # Use bitsandbytes quantization config if we requested 8-bit mode
         quant_config = None
 
         load_kwargs = {"device_map": "cuda"}
@@ -78,12 +102,123 @@ def load_local_model():
         return {"ok": False, "msg": str(e)}
 
 
-# If the user asked for automatic loading, attempt it now
 startup_result = load_local_model()
 if not startup_result.get("ok"):
-    print(f"⚠️ Startup load failed: {startup_result.get('msg')}")
+    print(f"Startup load failed: {startup_result.get('msg')}")
 else:
-    print("✅ Startup load succeeded.")
+    print("Startup load succeeded.")
+
+
+def _ensure_model_ready() -> None:
+    """Raise a helpful HTTP error if inference is not ready."""
+    if model is not None and processor is not None:
+        return
+
+    if USE_REMOTE_INFERENCE and HF_TOKEN:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Remote inference is configured but not implemented in this container. Set up HF_TOKEN and a remote client "
+                "or enable local model loading via /load-model."
+            ),
+        )
+
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Qwen3-VL model is not loaded on the server. To enable local inference, call GET /load-model or set "
+            "USE_REMOTE_INFERENCE=true with an HF_TOKEN for remote fallback."
+        ),
+    )
+
+
+def _prepare_image(contents: bytes) -> Image.Image:
+    image = Image.open(BytesIO(contents)).convert("RGB")
+    if max(image.size) > MAX_IMAGE_RESOLUTION:
+        image.thumbnail((MAX_IMAGE_RESOLUTION, MAX_IMAGE_RESOLUTION))
+    return image
+
+
+def _run_generation(image: Image.Image) -> Dict[str, Any]:
+    _ensure_model_ready()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": USER_PROMPT},
+            ],
+        }
+    ]
+
+    start_time = time.time()
+
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+
+    gen_kwargs = {
+        "max_new_tokens": GEN_MAX_NEW_TOKENS,
+        "top_p": GEN_TOP_P,
+        "top_k": GEN_TOP_K,
+        "temperature": GEN_TEMPERATURE,
+        "repetition_penalty": GEN_REPETITION_PENALTY,
+        "do_sample": True,
+    }
+
+    with torch.no_grad():
+        generated_ids = model.generate(**inputs, **gen_kwargs)
+
+    input_ids = inputs.get("input_ids")
+    if input_ids is not None:
+        generated_trimmed: List[torch.Tensor] = []
+        for in_ids, out_ids in zip(input_ids, generated_ids):
+            in_len = in_ids.shape[0]
+            generated_trimmed.append(out_ids[in_len:])
+    else:
+        generated_trimmed = [generated_ids[0]] if len(generated_ids) else []
+
+    output_texts = processor.batch_decode(
+        generated_trimmed,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )
+    output_text = output_texts[0] if output_texts else ""
+    end_time = time.time()
+
+    return {
+        "output": output_text,
+        "processing_time_ms": int((end_time - start_time) * 1000),
+    }
+
+
+def _analyze_prepared_image(image: Image.Image, filename: str, file_size: int) -> Dict[str, Any]:
+    generation = _run_generation(image)
+    return {
+        "success": True,
+        "filename": filename,
+        "size_bytes": file_size,
+        "analysis": {
+            **generation,
+            "model_version": MODEL_NAME,
+        },
+    }
+
+
+def _extract_confidence(output_text: str) -> Optional[float]:
+    match = CONFIDENCE_REGEX.search(output_text or "")
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
 
 # ==========================
 # Routes
@@ -100,96 +235,8 @@ async def analyze_food(file: UploadFile = File(...)) -> Dict:
     if file_size > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File exceeds 10MB limit")
 
-    image = Image.open(BytesIO(contents)).convert("RGB")
-    # Downscale extremely large photos to keep the vision encoder fast
-    if max(image.size) > MAX_IMAGE_RESOLUTION:
-        image.thumbnail((MAX_IMAGE_RESOLUTION, MAX_IMAGE_RESOLUTION))
-
-    if model is None or processor is None:
-        # Model is not available locally. If the server is configured to use remote
-        # inference and a HF token is present, that would be used (not implemented yet).
-        if USE_REMOTE_INFERENCE and HF_TOKEN:
-            raise HTTPException(status_code=501, detail="Remote inference is configured but not implemented in this container. Set up HF_TOKEN and a remote client or enable local model loading via /load-model.")
-
-        # Otherwise instruct the user to either load the local model or configure remote inference
-        raise HTTPException(
-            status_code=503,
-            detail=("Qwen3-VL model is not loaded on the server. To enable local inference, call GET /load-model or set USE_REMOTE_INFERENCE=true with an HF_TOKEN for remote fallback.")
-        )
-
-    user_prompt = (
-        "You are a food recognition model. Respond using exactly this template without extra commentary: \n"
-        "Dish: <concise name>\n"
-        "Ingredients: comma-separated list\n"
-        "Nutrition (per serving, approximate): Calories <number> kcal; Protein <number> g; Carbs <number> g; Fat <number> g\n"
-        "Confidence: <number>%\n"
-        "Before producing the template, quickly reason about portion size and per-ingredient macros so each dish gets unique, realistic numbers.\n"
-        "Examples (do not copy the numbers):\n"
-        "Dish: Sushi roll\nIngredients: rice, nori, salmon, avocado\nNutrition (per serving, approximate): Calories 280 kcal; Protein 18 g; Carbs 32 g; Fat 9 g\nConfidence: 88%\n"
-        "Dish: Greek salad\nIngredients: lettuce, tomato, cucumber, olives, feta cheese, dressing\nNutrition (per serving, approximate): Calories 190 kcal; Protein 6 g; Carbs 10 g; Fat 14 g\nConfidence: 74%\n"
-        "Requirements: no prefatory phrases like 'This dish is'; no disclaimers; always supply a numeric confidence between 0 and 100; nutrition numbers must differ between dishes and be realistic for the detected ingredients (never reuse the same defaults)."
-    )
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": user_prompt},
-            ],
-        }
-    ]
-
-    start_time = time.time()
-
-    inputs = processor.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-    )
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
-
-    # Build generation kwargs; `presence_penalty` is not accepted by most HF models' generate()
-    gen_kwargs = {
-        "max_new_tokens": GEN_MAX_NEW_TOKENS,
-        "top_p": GEN_TOP_P,
-        "top_k": GEN_TOP_K,
-        "temperature": GEN_TEMPERATURE,
-        "repetition_penalty": GEN_REPETITION_PENALTY,
-        "do_sample": True,
-    }
-
-    with torch.no_grad():
-        generated_ids = model.generate(**inputs, **gen_kwargs)
-
-    # If inputs include input_ids, trim the prompt tokens from the generated ids
-    input_ids = inputs.get("input_ids")
-    if input_ids is not None:
-        # generated_ids is (batch, seq_len); remove the input prefix per example
-        generated_trimmed = []
-        for in_ids, out_ids in zip(input_ids, generated_ids):
-            in_len = in_ids.shape[0]
-            generated_trimmed.append(out_ids[in_len:])
-    else:
-        generated_trimmed = [generated_ids[0]] if len(generated_ids) else []
-
-    # Use processor.batch_decode to get a clean string
-    output_texts = processor.batch_decode(generated_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-    output_text = output_texts[0] if output_texts else ""
-    end_time = time.time()
-
-    return {
-        "success": True,
-        "filename": file.filename,
-        "size_bytes": file_size,
-        "analysis": {
-            "output": output_text,
-            "processing_time_ms": int((end_time - start_time) * 1000),
-            "model_version": MODEL_NAME,
-        },
-    }
+    image = _prepare_image(contents)
+    return _analyze_prepared_image(image, file.filename, file_size)
 
 
 @app.get("/health")
@@ -212,3 +259,69 @@ def load_model_endpoint():
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("msg", "unknown error"))
     return {"status": "loaded", "message": result.get("msg")}
+
+
+@app.get("/batch-test")
+def batch_test(folder: Optional[str] = None) -> Dict[str, Any]:
+    """Run the vision model against every supported image in a folder and summarize the results."""
+    _ensure_model_ready()
+
+    target_dir = os.path.abspath(folder or DEFAULT_TEST_PHOTO_DIR)
+    if not os.path.isdir(target_dir):
+        raise HTTPException(status_code=404, detail=f"Folder '{target_dir}' does not exist")
+
+    image_files = [
+        f for f in os.listdir(target_dir)
+        if os.path.splitext(f)[1].lower() in SUPPORTED_IMAGE_EXTENSIONS
+    ]
+
+    if not image_files:
+        raise HTTPException(status_code=400, detail="No supported images found in the specified folder")
+
+    results: List[Dict[str, Any]] = []
+    confidence_values: List[float] = []
+    total_latency = 0
+
+    for filename in sorted(image_files):
+        file_path = os.path.join(target_dir, filename)
+        try:
+            with open(file_path, "rb") as fh:
+                contents = fh.read()
+
+            image = _prepare_image(contents)
+            analysis = _analyze_prepared_image(image, filename, len(contents))
+            parsed_confidence = _extract_confidence(analysis["analysis"].get("output", ""))
+            if parsed_confidence is not None:
+                confidence_values.append(parsed_confidence)
+                analysis["analysis"]["parsed_confidence"] = parsed_confidence
+
+            total_latency += analysis["analysis"].get("processing_time_ms", 0)
+            results.append(analysis)
+        except Exception as exc:  # noqa: BLE001 - surface the failure content to the caller
+            results.append({
+                "success": False,
+                "filename": filename,
+                "error": str(exc),
+            })
+
+    success_count = sum(1 for item in results if item.get("success"))
+    failure_count = len(results) - success_count
+    avg_confidence = (
+        round(sum(confidence_values) / len(confidence_values), 2)
+        if confidence_values else None
+    )
+    avg_latency = (
+        int(total_latency / success_count) if success_count else None
+    )
+
+    return {
+        "folder": target_dir,
+        "total_images": len(results),
+        "summary": {
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "average_confidence_percent": avg_confidence,
+            "average_processing_time_ms": avg_latency,
+        },
+        "results": results,
+    }

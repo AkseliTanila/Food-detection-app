@@ -29,7 +29,7 @@ AI based food detection application that uses Qwen3-VL for on-device multimodal 
 
 - Open `http://localhost:3000` and upload an image. The backend should start responding immediately because the weights were loaded at container boot.
 - Health endpoint (`http://localhost:8000/health`) shows `model_loaded: true` and `gpu_available: true` once the Qwen weights are in memory.
-- Logs from the backend container will print `📦 Using preloaded Qwen weights at /opt/models/qwen3-vl-2b-instruct` if the baked-in snapshot is detected.
+- Logs from the backend container will print `Using preloaded Qwen weights at /opt/models/qwen3-vl-2b-instruct` if the baked-in snapshot is detected.
 
 ## Tuning / overrides
 
