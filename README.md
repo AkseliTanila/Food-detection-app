@@ -2,7 +2,7 @@
 
 AI based food detection application that uses Qwen3-VL for on-device multimodal inference.
 
-Application consists of a Next.js frontend, and Python backend. Users are able to upload images to the web interface, and run the AI analysis of that image. 
+Application consists of a Next.js frontend, and Python backend. Application is Dockerized. Users are able to upload images to the web interface, and run the AI analysis of that image. 
 
 Application is tailored to handle food related images, and return following parameters:
 - Dish
