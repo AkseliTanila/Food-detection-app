@@ -9,14 +9,7 @@ services:
       # Persist huggingface/transformers cache so model files are not re-downloaded every build
       - ./hf_cache:/opt/hf_cache
     # Enable GPU access in Compose v2+; Docker must support GPUs on host.
-    # GPU support in Compose depends on your Docker/Compose version.
-    # If you use the modern Docker CLI plugin (run `docker compose` v2+),
-    # GPU access can be enabled outside the Compose file or with the
-    # `--gpus` flag when starting containers. The legacy `docker-compose`
-    # python package may reject the `gpus` property, so it has been removed
-    # here to ensure `docker-compose build` works. If you need GPU support,
-    # run the container with `docker run --gpus all ...` or switch to
-    # Docker Compose v2 (the `docker compose` command) and re-add GPU settings.
+    gpus: all
     # Increase shared memory and ulimits to help large model loading
     shm_size: '2g'
     ulimits:
