@@ -9,7 +9,14 @@ services:
       # Persist huggingface/transformers cache so model files are not re-downloaded every build
       - ./hf_cache:/opt/hf_cache
     # Enable GPU access in Compose v2+; Docker must support GPUs on host.
-    gpus: all
+    # GPU support in Compose depends on your Docker/Compose version.
+    # If you use the modern Docker CLI plugin (run `docker compose` v2+),
+    # GPU access can be enabled outside the Compose file or with the
+    # `--gpus` flag when starting containers. The legacy `docker-compose`
+    # python package may reject the `gpus` property, so it has been removed
+    # here to ensure `docker-compose build` works. If you need GPU support,
+    # run the container with `docker run --gpus all ...` or switch to
+    # Docker Compose v2 (the `docker compose` command) and re-add GPU settings.
     # Increase shared memory and ulimits to help large model loading
     shm_size: '2g'
     ulimits:
@@ -30,12 +37,15 @@ services:
       - GEN_MAX_NEW_TOKENS=80
       # Optional: enable remote inference fallback (set to "true" and provide HF_TOKEN)
       - USE_REMOTE_INFERENCE=false
-      - HF_TOKEN=
+      - HF_TOKEN=${HF_TOKEN}
       # Make sure transformers/huggingface use the mounted cache directory
       - HF_HOME=/opt/hf_cache
       - TRANSFORMERS_CACHE=/opt/hf_cache/transformers
       - HF_DATASETS_CACHE=/opt/hf_cache/datasets
       - QWEN_VL_LOCAL_PATH=/opt/models/qwen3-vl-2b-instruct
+      # Paste your OpenAI API key here for direct OpenAI Vision inference
+      # WARNING: Do NOT commit secrets to git. Use a .env file with the variables below.
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     networks:
       - app-network
 

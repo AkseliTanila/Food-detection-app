@@ -3,11 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
 import os
 import torch
+from fastapi import Form
 from PIL import Image
 from transformers import AutoProcessor
 from transformers import Qwen3VLForConditionalGeneration
 from io import BytesIO
 import time
+import base64
+import json
+import httpx
 
 app = FastAPI(title="Food Detection API", version="1.0.0")
 
@@ -46,6 +50,10 @@ model = None
 # Optionally enable remote inference fallback
 USE_REMOTE_INFERENCE = os.environ.get("USE_REMOTE_INFERENCE", "false").lower() in ("1", "true", "yes")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-vision-1")
+REMOTE_INFERENCE_URL = os.environ.get("REMOTE_INFERENCE_URL", "")
+REMOTE_INFERENCE_API_KEY = os.environ.get("REMOTE_INFERENCE_API_KEY", "")
 
 
 def load_local_model():
@@ -91,7 +99,7 @@ else:
 
 
 @app.post("/analyze-food")
-async def analyze_food(file: UploadFile = File(...)) -> Dict:
+async def analyze_food(file: UploadFile = File(...), inference_mode: str = Form("local")) -> Dict:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
@@ -104,6 +112,24 @@ async def analyze_food(file: UploadFile = File(...)) -> Dict:
     # Downscale extremely large photos to keep the vision encoder fast
     if max(image.size) > MAX_IMAGE_RESOLUTION:
         image.thumbnail((MAX_IMAGE_RESOLUTION, MAX_IMAGE_RESOLUTION))
+
+    # Normalize the inference_mode and support multiple remote keywords.
+    mode = (inference_mode or "local").lower().strip()
+
+    # If the user asked for OpenAI explicitly, or selected a generic remote API
+    # and we have an OpenAI key, prefer OpenAI. Otherwise, if REMOTE_INFERENCE_URL
+    # is configured and the frontend asked for a remote API, forward there.
+    if mode == "openai" or (mode in ("api", "remote") and OPENAI_API_KEY):
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=400, detail="OPENAI_API_KEY not configured on server")
+        return await call_openai_inference(contents, file.filename, file.content_type)
+
+    if mode in ("api", "remote") and REMOTE_INFERENCE_URL:
+        return await call_remote_inference(contents, file.filename, file.content_type)
+
+    # If mode requested remote API but no provider is configured, return helpful error
+    if mode in ("api", "remote") and not (OPENAI_API_KEY or REMOTE_INFERENCE_URL):
+        raise HTTPException(status_code=400, detail="inference_mode=api requested but no remote provider is configured (OPENAI_API_KEY or REMOTE_INFERENCE_URL)")
 
     if model is None or processor is None:
         # Model is not available locally. If the server is configured to use remote
@@ -212,3 +238,134 @@ def load_model_endpoint():
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("msg", "unknown error"))
     return {"status": "loaded", "message": result.get("msg")}
+
+
+async def call_openai_inference(file_bytes: bytes, filename: str, content_type: str) -> Dict:
+    """Send the image to OpenAI Responses (vision) endpoint and normalize the output
+    into the same analysis shape the frontend expects.
+    """
+    # Encode image as data URL (base64) so we don't need multipart upload handling
+    b64 = base64.b64encode(file_bytes).decode("ascii")
+    data_url = f"data:{content_type};base64,{b64}"
+
+    user_prompt = (
+        "You are a food recognition model. Respond using exactly this template without extra commentary: \n"
+        "Dish: <concise name>\n"
+        "Ingredients: comma-separated list\n"
+        "Nutrition (per serving, approximate): Calories <number> kcal; Protein <number> g; Carbs <number> g; Fat <number> g\n"
+        "Confidence: <number>%\n"
+        "Before producing the template, quickly reason about portion size and per-ingredient macros so each dish gets unique, realistic numbers."
+    )
+
+    payload = {
+        "model": OPENAI_MODEL,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": user_prompt},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.post("https://api.openai.com/v1/responses", headers=headers, json=payload)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"OpenAI request failed: {e}")
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"OpenAI returned {resp.status_code}: {resp.text}")
+
+    try:
+        j = resp.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid JSON returned from OpenAI")
+
+    # Attempt to extract a usable string from various response shapes
+    output_text = ""
+    # Preferred path: Responses API 'output' or 'choices' text
+    if isinstance(j.get("output"), list) and j.get("output"):
+        parts = []
+        for item in j.get("output"):
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                # Many times content will be under 'content' or 'mime' fields
+                cont = item.get("content")
+                if isinstance(cont, list):
+                    for c in cont:
+                        if isinstance(c, str):
+                            parts.append(c)
+                        elif isinstance(c, dict) and c.get("type") == "output_text":
+                            parts.append(c.get("text", ""))
+        output_text = "\n".join([p for p in parts if p])
+
+    # Fallbacks used by older response shapes
+    if not output_text:
+        # choices -> [ { text } ]
+        choices = j.get("choices") or []
+        txts = [c.get("text") for c in choices if isinstance(c, dict) and c.get("text")]
+        output_text = "\n".join(txts)
+
+    if not output_text:
+        # final fallback: stringify the whole response (keeps debug info)
+        output_text = json.dumps(j)
+
+    return {
+        "success": True,
+        "filename": filename,
+        "size_bytes": len(file_bytes),
+        "analysis": {
+            "output": output_text,
+            "processing_time_ms": 0,
+            "model_version": OPENAI_MODEL,
+            "raw_openai_response": j,
+        },
+    }
+
+
+async def call_remote_inference(file_bytes: bytes, filename: str, content_type: str) -> Dict:
+    """Forward the uploaded image to a generic remote inference URL (multipart form).
+    If the remote returns JSON with an `analysis` key, it is passed through; otherwise
+    the remote JSON is wrapped into `analysis` for consistency.
+    """
+    if not REMOTE_INFERENCE_URL:
+        raise HTTPException(status_code=400, detail="REMOTE_INFERENCE_URL is not configured")
+
+    headers = {}
+    if REMOTE_INFERENCE_API_KEY:
+        headers["Authorization"] = f"Bearer {REMOTE_INFERENCE_API_KEY}"
+
+    files = {"file": (filename, file_bytes, content_type)}
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.post(REMOTE_INFERENCE_URL, headers=headers, files=files)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Remote inference request failed: {e}")
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Remote inference returned {resp.status_code}: {resp.text}")
+
+    try:
+        j = resp.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid JSON returned from remote inference")
+
+    if isinstance(j, dict) and "analysis" in j:
+        return j
+
+    return {
+        "success": True,
+        "filename": filename,
+        "size_bytes": len(file_bytes),
+        "analysis": j,
+    }

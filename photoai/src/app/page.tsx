@@ -1,6 +1,6 @@
 "use client";
 
-import type React from "react";
+import React from "react";
 
 import { useState, useEffect, useRef } from "react";
 import { Upload, Sparkles, Camera } from "lucide-react";
@@ -44,6 +44,7 @@ export default function FoodRecognizer() {
   );
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>("");
+  const [inferenceMode, setInferenceMode] = useState<string>("local");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleFileSelect = (file: File) => {
@@ -85,6 +86,7 @@ export default function FoodRecognizer() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
+        formData.append("inference_mode", inferenceMode);
 
       const response = await fetch("/api/analyze-food", {
         method: "POST",
@@ -378,6 +380,18 @@ export default function FoodRecognizer() {
               </div>
 
               <div className="flex gap-3">
+                <div className="flex items-center gap-3">
+                  <label className="text-sm text-muted-foreground">Inference</label>
+                  <select
+                    value={inferenceMode}
+                    onChange={(e) => setInferenceMode(e.target.value)}
+                    className="rounded-md border px-2 py-1 text-sm"
+                    aria-label="Inference mode"
+                  >
+                    <option value="local">Local model</option>
+                    <option value="api">Remote API</option>
+                  </select>
+                </div>
                 <Button
                   onClick={handleAnalyze}
                   disabled={isAnalyzing || !selectedFile}
