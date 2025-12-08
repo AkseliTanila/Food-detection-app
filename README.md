@@ -8,7 +8,6 @@ Application is tailored to handle food related images, and return following para
 - Dish
 - Ingredients
 - Nutrients (per serving approximates)
-- Confidence (of the AI analysis)
 
 
 ## Prerequisites
