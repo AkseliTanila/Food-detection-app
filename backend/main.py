@@ -263,7 +263,6 @@ def load_model_endpoint():
 
 @app.get("/batch-test")
 def batch_test(folder: Optional[str] = None) -> Dict[str, Any]:
-    """Run the vision model against every supported image in a folder and summarize the results."""
     _ensure_model_ready()
 
     target_dir = os.path.abspath(folder or DEFAULT_TEST_PHOTO_DIR)
