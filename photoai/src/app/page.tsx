@@ -35,6 +35,19 @@ interface AnalysisResult {
   };
 }
 
+const INFERENCE_OPTIONS = [
+  {
+    value: "local",
+    label: "Local model",
+    description: "Run inference with the GPU on this machine",
+  },
+  {
+    value: "api",
+    label: "Remote API",
+    description: "Forward to the hosted inference API",
+  },
+];
+
 export default function FoodRecognizer() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -47,6 +60,14 @@ export default function FoodRecognizer() {
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [inferenceMode, setInferenceMode] = useState<string>("local");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const analysis = analysisResult?.analysis;
+  const detectedFoods = analysis?.detected_foods ?? [];
+  const hasDetectedFoods = detectedFoods.length > 0;
+  const modelConfidencePercent =
+    typeof analysis?.model_confidence_percent === "number"
+      ? analysis.model_confidence_percent
+      : null;
+  const modelOutput = analysis?.output;
 
   const handleFileSelect = (file: File) => {
     if (file && file.type.startsWith("image/")) {
@@ -82,7 +103,13 @@ export default function FoodRecognizer() {
 
     setIsAnalyzing(true);
     setError(null);
-    setStatusMessage("Sending image to backend…");
+    const modeLabel =
+      inferenceMode === "local"
+        ? "local model"
+        : inferenceMode === "api"
+        ? "remote API"
+        : "backend";
+    setStatusMessage(`Sending image to ${modeLabel}…`);
 
     try {
       const formData = new FormData();
@@ -214,6 +241,41 @@ export default function FoodRecognizer() {
                 </div>
               )}
 
+              <div className="bg-muted/40 border border-border rounded-lg p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-semibold text-card-foreground">
+                    Inference mode
+                  </p>
+                  <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                    beta
+                  </span>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {INFERENCE_OPTIONS.map((option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      variant={
+                        inferenceMode === option.value ? "default" : "outline"
+                      }
+                      className="w-full justify-start"
+                      onClick={() => setInferenceMode(option.value)}
+                    >
+                      <div>
+                        <p className="font-medium">{option.label}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {option.description}
+                        </p>
+                      </div>
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground mt-3">
+                  Decide whether to use the local model or forward the request
+                  through the API before running analysis.
+                </p>
+              </div>
+
               {/* Results */}
               <div className="bg-secondary/50 rounded-lg p-6 border border-border">
                 <div className="flex items-center gap-2 mb-4">
@@ -238,159 +300,85 @@ export default function FoodRecognizer() {
                   </div>
                 ) : analysisResult ? (
                   <div className="space-y-4">
-                    {analysisResult.analysis.model_confidence_percent !==
-                      undefined && (
+                    {modelConfidencePercent !== null && (
                       <p className="text-sm text-muted-foreground">
-                        Model confidence: {analysisResult.analysis.model_confidence_percent.toFixed(1)}%
+                        Model confidence: {modelConfidencePercent.toFixed(1)}%
                       </p>
                     )}
 
-                    {analysisResult.analysis.detected_foods &&
-                      analysisResult.analysis.detected_foods.length > 0 && (
-                        <>
-                          <div className="space-y-3">
-                            {analysisResult.analysis.detected_foods.map(
-                              (food, index) => (
-                                <div
-                                  key={index}
-                                  className="bg-background rounded-lg p-4"
-                                >
-                                  <div className="flex justify-between items-start mb-2">
-                                    <h4 className="font-medium text-foreground">
-                                      {food.name}
-                                    </h4>
-                                    <span className="text-sm text-muted-foreground">
-                                      {(food.confidence * 100).toFixed(0)}%
-                                      confidence
-                                    </span>
-                                  </div>
+                    {hasDetectedFoods && (
+                      <div className="space-y-3">
+                        {detectedFoods.map((food, index) => (
+                          <div
+                            key={index}
+                            className="bg-primary/10 border border-primary/20 rounded-lg p-4"
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <h4 className="font-medium text-foreground">
+                                {food.name}
+                              </h4>
+                              <span className="text-sm text-muted-foreground">
+                                {(food.confidence * 100).toFixed(0)}% confidence
+                              </span>
+                            </div>
 
-                                  {food.calories ? (
-                                    <div className="grid grid-cols-4 gap-2 text-sm">
-                                      <div>
-                                        <p className="text-muted-foreground">
-                                          Calories
-                                        </p>
-                                        <p className="font-medium">
-                                          {food.calories}
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="text-muted-foreground">
-                                          Protein
-                                        </p>
-                                        <p className="font-medium">
-                                          {food.protein_g}g
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="text-muted-foreground">
-                                          Carbs
-                                        </p>
-                                        <p className="font-medium">
-                                          {food.carbs_g}g
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="text-muted-foreground">
-                                          Fat
-                                        </p>
-                                        <p className="font-medium">
-                                          {food.fat_g}g
-                                        </p>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <p className="text-sm text-muted-foreground">
-                                      Nutrition data not available
-                                    </p>
-                                  )}
+                            {food.calories ? (
+                              <div className="grid grid-cols-4 gap-2 text-sm">
+                                <div>
+                                  <p className="text-muted-foreground">
+                                    Calories
+                                  </p>
+                                  <p className="font-bold text-primary">
+                                    {food.calories}
+                                  </p>
                                 </div>
-                              )
+                                <div>
+                                  <p className="text-muted-foreground">
+                                    Protein
+                                  </p>
+                                  <p className="font-bold text-primary">
+                                    {food.protein_g}g
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-muted-foreground">Carbs</p>
+                                  <p className="font-bold text-primary">
+                                    {food.carbs_g}g
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-muted-foreground">Fat</p>
+                                  <p className="font-bold text-primary">
+                                    {food.fat_g}g
+                                  </p>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">
+                                Nutrition data not available
+                              </p>
                             )}
                           </div>
+                        ))}
+                      </div>
+                    )}
 
-                          <div className="bg-primary/10 rounded-lg p-4">
-                            <h4 className="font-semibold mb-2 text-foreground">
-                              Total Nutrition
-                            </h4>
-                            <div className="grid grid-cols-4 gap-2 text-sm">
-                              {analysisResult.analysis.total_nutrition ? (
-                                <>
-                                  <div>
-                                    <p className="text-muted-foreground">
-                                      Calories
-                                    </p>
-                                    <p className="font-bold text-primary">
-                                      {
-                                        analysisResult.analysis.total_nutrition
-                                          .calories
-                                      }
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-muted-foreground">
-                                      Protein
-                                    </p>
-                                    <p className="font-bold text-primary">
-                                      {
-                                        analysisResult.analysis.total_nutrition
-                                          .protein_g
-                                      }
-                                      g
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-muted-foreground">
-                                      Carbs
-                                    </p>
-                                    <p className="font-bold text-primary">
-                                      {
-                                        analysisResult.analysis.total_nutrition
-                                          .carbs_g
-                                      }
-                                      g
-                                    </p>
-                                  </div>
-                                  <div>
-                                    <p className="text-muted-foreground">Fat</p>
-                                    <p className="font-bold text-primary">
-                                      {
-                                        analysisResult.analysis.total_nutrition
-                                          .fat_g
-                                      }
-                                      g
-                                    </p>
-                                  </div>
-                                </>
-                              ) : (
-                                <p className="text-sm text-muted-foreground">
-                                  Nutrition data not available
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </>
-                      )}
-
-                    {analysisResult.analysis.output && (
+                    {modelOutput && (
                       <div className="bg-background rounded-lg p-4">
                         <h4 className="font-medium text-foreground mb-2">
                           Model Output
                         </h4>
                         <pre className="whitespace-pre-wrap text-sm text-muted-foreground">
-                          {analysisResult.analysis.output}
+                          {modelOutput}
                         </pre>
                       </div>
                     )}
 
-                    {!analysisResult.analysis.output &&
-                      (!analysisResult.analysis.detected_foods ||
-                        analysisResult.analysis.detected_foods.length === 0) && (
-                        <p className="text-sm text-muted-foreground">
-                          No analysis details returned.
-                        </p>
-                      )}
+                    {!modelOutput && !hasDetectedFoods && (
+                      <p className="text-sm text-muted-foreground">
+                        No analysis details returned.
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <p className="text-muted-foreground">
@@ -405,6 +393,7 @@ export default function FoodRecognizer() {
                   disabled={isAnalyzing || !selectedFile}
                   size="lg"
                   className="flex-1"
+                  type="button"
                 >
                   {isAnalyzing ? (
                     <>
@@ -423,6 +412,7 @@ export default function FoodRecognizer() {
                   variant="outline"
                   size="lg"
                   disabled={isAnalyzing}
+                  type="button"
                 >
                   Upload New
                 </Button>

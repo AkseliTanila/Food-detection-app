@@ -45,7 +45,7 @@ MAX_IMAGE_RESOLUTION = int(os.environ.get("MAX_IMAGE_RESOLUTION", 1024))
 DEFAULT_TEST_PHOTO_DIR = os.path.abspath(
     os.environ.get(
         "TEST_PHOTO_DIR",
-        os.path.join(os.path.dirname(__file__), "..", "photoai", "src", "app", "testPhotos")
+        os.path.join(os.path.dirname(__file__), "..","app", "testPhotos")
     )
 )
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
@@ -67,6 +67,7 @@ USER_PROMPT = (
     "  * 30-59%: unclear angle or visually similar alternatives.\n"
     "  * 0-29%: very high uncertainty.\n"
     "- Nutrition numbers must vary between dishes and be realistic.\n"
+    "- Show protein, carbs, and fat with one decimal place (e.g., Protein 3.4 g).\n"
 )
 
 processor = None
@@ -200,9 +201,18 @@ def _run_generation(image: Image.Image) -> Dict[str, Any]:
     output_text = output_texts[0] if output_texts else ""
     end_time = time.time()
 
+    parsed = parse_model_output(output_text)
+    model_confidence = parsed.get("confidence")
+    model_confidence_percent = (
+        round(model_confidence * 100, 1) if model_confidence is not None else None
+    )
+
     return {
         "output": output_text,
         "processing_time_ms": int((end_time - start_time) * 1000),
+        "parsed": parsed,
+        "model_confidence": model_confidence,
+        "model_confidence_percent": model_confidence_percent,
     }
 
 
@@ -422,24 +432,28 @@ async def analyze_food(
     else:
         generation = _run_generation(image)
 
-    detected_foods = []
     parsed = generation.get("parsed")
-    if parsed:
-        detected_foods.append({
+
+    detected_foods: List[Dict[str, Any]] = []
+    provided_foods = generation.get("detected_foods")
+    if isinstance(provided_foods, list) and provided_foods:
+        detected_foods = provided_foods
+    elif parsed:
+        detected_foods = [{
             "name": parsed.get("dish") or "Unknown",
             "confidence": parsed.get("confidence") or 0.5,
             "calories": parsed.get("calories"),
             "protein_g": parsed.get("protein_g"),
             "carbs_g": parsed.get("carbs_g"),
             "fat_g": parsed.get("fat_g"),
-        })
+        }]
 
-    total_nutrition = None
-    if detected_foods:
-        total_cal = sum(f.get("calories") or 0 for f in detected_foods)
-        total_pro = sum(f.get("protein_g") or 0 for f in detected_foods)
-        total_carbs = sum(f.get("carbs_g") or 0 for f in detected_foods)
-        total_fat = sum(f.get("fat_g") or 0 for f in detected_foods)
+    total_nutrition = generation.get("total_nutrition")
+    if total_nutrition is None and detected_foods:
+        total_cal = sum((f.get("calories") or 0) for f in detected_foods)
+        total_pro = sum((f.get("protein_g") or 0) for f in detected_foods)
+        total_carbs = sum((f.get("carbs_g") or 0) for f in detected_foods)
+        total_fat = sum((f.get("fat_g") or 0) for f in detected_foods)
         if any([total_cal, total_pro, total_carbs, total_fat]):
             total_nutrition = {
                 "calories": total_cal,
@@ -447,6 +461,13 @@ async def analyze_food(
                 "carbs_g": total_carbs,
                 "fat_g": total_fat,
             }
+
+    model_confidence = generation.get("model_confidence")
+    model_confidence_percent = generation.get("model_confidence_percent")
+    if model_confidence is None and parsed and parsed.get("confidence") is not None:
+        model_confidence = parsed.get("confidence")
+    if model_confidence_percent is None and model_confidence is not None:
+        model_confidence_percent = round(model_confidence * 100, 1)
 
     return {
         "success": True,
@@ -456,8 +477,8 @@ async def analyze_food(
             "output": generation.get("output"),
             "detected_foods": detected_foods,
             "total_nutrition": total_nutrition,
-            "model_confidence": generation.get("model_confidence"),
-            "model_confidence_percent": generation.get("model_confidence_percent"),
+            "model_confidence": model_confidence,
+            "model_confidence_percent": model_confidence_percent,
             "processing_time_ms": generation.get("processing_time_ms"),
             "model_version": MODEL_NAME,
         },
