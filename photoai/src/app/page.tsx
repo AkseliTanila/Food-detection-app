@@ -29,6 +29,7 @@ interface AnalysisResult {
       carbs_g: number;
       fat_g: number;
     };
+    model_confidence_percent?: number;
     processing_time_ms: number;
     model_version: string;
   };
@@ -44,6 +45,7 @@ export default function FoodRecognizer() {
   );
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>("");
+  const [inferenceMode, setInferenceMode] = useState<string>("local");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleFileSelect = (file: File) => {
@@ -85,6 +87,7 @@ export default function FoodRecognizer() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
+      formData.append("inference_mode", inferenceMode);
 
       const response = await fetch("/api/analyze-food", {
         method: "POST",
@@ -235,8 +238,142 @@ export default function FoodRecognizer() {
                   </div>
                 ) : analysisResult ? (
                   <div className="space-y-4">
-                    {/* If the backend returned a textual `output`, show it prominently */}
-                    {analysisResult.analysis.output ? (
+                    {analysisResult.analysis.model_confidence_percent !==
+                      undefined && (
+                      <p className="text-sm text-muted-foreground">
+                        Model confidence: {analysisResult.analysis.model_confidence_percent.toFixed(1)}%
+                      </p>
+                    )}
+
+                    {analysisResult.analysis.detected_foods &&
+                      analysisResult.analysis.detected_foods.length > 0 && (
+                        <>
+                          <div className="space-y-3">
+                            {analysisResult.analysis.detected_foods.map(
+                              (food, index) => (
+                                <div
+                                  key={index}
+                                  className="bg-background rounded-lg p-4"
+                                >
+                                  <div className="flex justify-between items-start mb-2">
+                                    <h4 className="font-medium text-foreground">
+                                      {food.name}
+                                    </h4>
+                                    <span className="text-sm text-muted-foreground">
+                                      {(food.confidence * 100).toFixed(0)}%
+                                      confidence
+                                    </span>
+                                  </div>
+
+                                  {food.calories ? (
+                                    <div className="grid grid-cols-4 gap-2 text-sm">
+                                      <div>
+                                        <p className="text-muted-foreground">
+                                          Calories
+                                        </p>
+                                        <p className="font-medium">
+                                          {food.calories}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-muted-foreground">
+                                          Protein
+                                        </p>
+                                        <p className="font-medium">
+                                          {food.protein_g}g
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-muted-foreground">
+                                          Carbs
+                                        </p>
+                                        <p className="font-medium">
+                                          {food.carbs_g}g
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-muted-foreground">
+                                          Fat
+                                        </p>
+                                        <p className="font-medium">
+                                          {food.fat_g}g
+                                        </p>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <p className="text-sm text-muted-foreground">
+                                      Nutrition data not available
+                                    </p>
+                                  )}
+                                </div>
+                              )
+                            )}
+                          </div>
+
+                          <div className="bg-primary/10 rounded-lg p-4">
+                            <h4 className="font-semibold mb-2 text-foreground">
+                              Total Nutrition
+                            </h4>
+                            <div className="grid grid-cols-4 gap-2 text-sm">
+                              {analysisResult.analysis.total_nutrition ? (
+                                <>
+                                  <div>
+                                    <p className="text-muted-foreground">
+                                      Calories
+                                    </p>
+                                    <p className="font-bold text-primary">
+                                      {
+                                        analysisResult.analysis.total_nutrition
+                                          .calories
+                                      }
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">
+                                      Protein
+                                    </p>
+                                    <p className="font-bold text-primary">
+                                      {
+                                        analysisResult.analysis.total_nutrition
+                                          .protein_g
+                                      }
+                                      g
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">
+                                      Carbs
+                                    </p>
+                                    <p className="font-bold text-primary">
+                                      {
+                                        analysisResult.analysis.total_nutrition
+                                          .carbs_g
+                                      }
+                                      g
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-muted-foreground">Fat</p>
+                                    <p className="font-bold text-primary">
+                                      {
+                                        analysisResult.analysis.total_nutrition
+                                          .fat_g
+                                      }
+                                      g
+                                    </p>
+                                  </div>
+                                </>
+                              ) : (
+                                <p className="text-sm text-muted-foreground">
+                                  Nutrition data not available
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                    {analysisResult.analysis.output && (
                       <div className="bg-background rounded-lg p-4">
                         <h4 className="font-medium text-foreground mb-2">
                           Model Output
@@ -245,130 +382,15 @@ export default function FoodRecognizer() {
                           {analysisResult.analysis.output}
                         </pre>
                       </div>
-                    ) : (
-                      <>
-                        <div className="space-y-3">
-                          {analysisResult.analysis.detected_foods?.map(
-                            (food, index) => (
-                              <div
-                                key={index}
-                                className="bg-background rounded-lg p-4"
-                              >
-                                <div className="flex justify-between items-start mb-2">
-                                  <h4 className="font-medium text-foreground">
-                                    {food.name}
-                                  </h4>
-                                  <span className="text-sm text-muted-foreground">
-                                    {(food.confidence * 100).toFixed(0)}%
-                                    confidence
-                                  </span>
-                                </div>
-
-                                {/* Only show nutrition if available */}
-                                {food.calories ? (
-                                  <div className="grid grid-cols-4 gap-2 text-sm">
-                                    <div>
-                                      <p className="text-muted-foreground">
-                                        Calories
-                                      </p>
-                                      <p className="font-medium">
-                                        {food.calories}
-                                      </p>
-                                    </div>
-                                    <div>
-                                      <p className="text-muted-foreground">
-                                        Protein
-                                      </p>
-                                      <p className="font-medium">
-                                        {food.protein_g}g
-                                      </p>
-                                    </div>
-                                    <div>
-                                      <p className="text-muted-foreground">
-                                        Carbs
-                                      </p>
-                                      <p className="font-medium">
-                                        {food.carbs_g}g
-                                      </p>
-                                    </div>
-                                    <div>
-                                      <p className="text-muted-foreground">
-                                        Fat
-                                      </p>
-                                      <p className="font-medium">
-                                        {food.fat_g}g
-                                      </p>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <p className="text-sm text-muted-foreground">
-                                    Nutrition data not available
-                                  </p>
-                                )}
-                              </div>
-                            )
-                          )}
-                        </div>
-                        <div className="bg-primary/10 rounded-lg p-4">
-                          <h4 className="font-semibold mb-2 text-foreground">
-                            Total Nutrition
-                          </h4>
-                          <div className="grid grid-cols-4 gap-2 text-sm">
-                            {analysisResult.analysis.total_nutrition ? (
-                              <>
-                                <div>
-                                  <p className="text-muted-foreground">
-                                    Calories
-                                  </p>
-                                  <p className="font-bold text-primary">
-                                    {
-                                      analysisResult.analysis.total_nutrition
-                                        .calories
-                                    }
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="text-muted-foreground">
-                                    Protein
-                                  </p>
-                                  <p className="font-bold text-primary">
-                                    {
-                                      analysisResult.analysis.total_nutrition
-                                        .protein_g
-                                    }
-                                    g
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="text-muted-foreground">Carbs</p>
-                                  <p className="font-bold text-primary">
-                                    {
-                                      analysisResult.analysis.total_nutrition
-                                        .carbs_g
-                                    }
-                                    g
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="text-muted-foreground">Fat</p>
-                                  <p className="font-bold text-primary">
-                                    {
-                                      analysisResult.analysis.total_nutrition
-                                        .fat_g
-                                    }
-                                    g
-                                  </p>
-                                </div>
-                              </>
-                            ) : (
-                              <p className="text-sm text-muted-foreground">
-                                Nutrition data not available
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      </>
                     )}
+
+                    {!analysisResult.analysis.output &&
+                      (!analysisResult.analysis.detected_foods ||
+                        analysisResult.analysis.detected_foods.length === 0) && (
+                        <p className="text-sm text-muted-foreground">
+                          No analysis details returned.
+                        </p>
+                      )}
                   </div>
                 ) : (
                   <p className="text-muted-foreground">
