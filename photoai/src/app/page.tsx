@@ -150,7 +150,6 @@ export default function FoodRecognizer() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -163,7 +162,6 @@ export default function FoodRecognizer() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="container mx-auto px-4 py-12 max-w-4xl">
         <div className="text-center mb-12">
           <h2 className="text-4xl md:text-5xl font-bold mb-4 text-balance text-foreground"></h2>
@@ -232,7 +230,6 @@ export default function FoodRecognizer() {
                 />
               </div>
 
-              {/* Error Message */}
               {error && (
                 <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-4">
                   <p className="text-red-800 dark:text-red-200 text-sm">
@@ -276,7 +273,6 @@ export default function FoodRecognizer() {
                 </p>
               </div>
 
-              {/* Results */}
               <div className="bg-secondary/50 rounded-lg p-6 border border-border">
                 <div className="flex items-center gap-2 mb-4">
                   <Sparkles className="h-5 w-5 text-accent" />
@@ -421,7 +417,6 @@ export default function FoodRecognizer() {
           )}
         </Card>
 
-        {/* Features */}
         <div className="grid md:grid-cols-3 gap-6 mt-12">
           <div className="text-center p-6">
             <div className="rounded-full bg-primary/10 w-12 h-12 flex items-center justify-center mx-auto mb-4">
