@@ -23,19 +23,23 @@ services:
       # Generation hyperparameters (tweak if OOM)
       - GEN_TOP_P=0.8
       - GEN_TOP_K=10
-      - GEN_TEMPERATURE=0.4
+      - GEN_TEMPERATURE=0.25
       - GEN_REPETITION_PENALTY=1.0
       - GEN_PRESENCE_PENALTY=1.2
       # Keep this conservative to start — increase if you have memory headroom
-      - GEN_MAX_NEW_TOKENS=120
+      - GEN_MAX_NEW_TOKENS=80
       # Optional: enable remote inference fallback (set to "true" and provide HF_TOKEN)
       - USE_REMOTE_INFERENCE=false
-      - HF_TOKEN=
+      - HF_TOKEN=${HF_TOKEN}
       # Make sure transformers/huggingface use the mounted cache directory
       - HF_HOME=/opt/hf_cache
       - TRANSFORMERS_CACHE=/opt/hf_cache/transformers
       - HF_DATASETS_CACHE=/opt/hf_cache/datasets
       - QWEN_VL_LOCAL_PATH=/opt/models/qwen3-vl-2b-instruct
+      # Paste your OpenAI API key here for direct OpenAI Vision inference
+      # WARNING: Do NOT commit secrets to git. Use a .env file with the variables below.
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
     networks:
       - app-network
 

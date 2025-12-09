@@ -3,12 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Any, Dict, List, Optional
 import os
 import torch
+import re
+import base64
+import json
+from fastapi import Form
 from PIL import Image
 from transformers import AutoProcessor
 from transformers import Qwen3VLForConditionalGeneration
 from io import BytesIO
 import time
-import re
+import httpx
 
 app = FastAPI(title="Food Detection API", version="1.0.0")
 
@@ -68,9 +72,13 @@ USER_PROMPT = (
 processor = None
 model = None
 
-# Optionally enable remote inference fallback
+# Optionally enable remote inference fallback / OpenAI
 USE_REMOTE_INFERENCE = os.environ.get("USE_REMOTE_INFERENCE", "false").lower() in ("1", "true", "yes")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+REMOTE_INFERENCE_URL = os.environ.get("REMOTE_INFERENCE_URL", "")
+REMOTE_INFERENCE_API_KEY = os.environ.get("REMOTE_INFERENCE_API_KEY", "")
 
 
 def load_local_model():
@@ -221,12 +229,174 @@ def _extract_confidence(output_text: str) -> Optional[float]:
         return None
 
 # ==========================
+# Helper functions
+# ==========================
+
+
+def parse_model_output(text: str) -> Dict[str, Any]:
+    result = {
+        "dish": None,
+        "ingredients": None,
+        "calories": None,
+        "protein_g": None,
+        "carbs_g": None,
+        "fat_g": None,
+        "confidence": None,
+    }
+    lines = (text or "").split("\n")
+    for line in lines:
+        line = line.strip()
+        if line.lower().startswith("dish:"):
+            result["dish"] = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("ingredients:"):
+            result["ingredients"] = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("nutrition"):
+            nutrition_text = line.split(":", 1)[1] if ":" in line else ""
+            nutrients = {}
+            for part in nutrition_text.split(";"):
+                part = part.strip()
+                if "calories" in part.lower():
+                    try:
+                        nutrients["calories"] = int("".join(c for c in part if c.isdigit()))
+                    except ValueError:
+                        pass
+                elif "protein" in part.lower():
+                    try:
+                        nutrients["protein_g"] = float("".join(c for c in part.replace("g", "") if c.isdigit() or c == "."))
+                    except ValueError:
+                        pass
+                elif "carbs" in part.lower():
+                    try:
+                        nutrients["carbs_g"] = float("".join(c for c in part.replace("g", "") if c.isdigit() or c == "."))
+                    except ValueError:
+                        pass
+                elif "fat" in part.lower():
+                    try:
+                        nutrients["fat_g"] = float("".join(c for c in part.replace("g", "") if c.isdigit() or c == "."))
+                    except ValueError:
+                        pass
+            result.update(nutrients)
+        elif line.lower().startswith("confidence:"):
+            conf_text = line.split(":", 1)[1].strip()
+            try:
+                result["confidence"] = float(conf_text.replace("%", "").strip()) / 100.0
+            except ValueError:
+                pass
+    return result
+
+
+async def call_openai_inference(file_bytes: bytes, filename: str, content_type: str) -> Dict[str, Any]:
+    if not OPENAI_API_KEY:
+        return {"error": "OPENAI_API_KEY not set"}
+
+    b64 = base64.b64encode(file_bytes).decode("ascii")
+    media_type = content_type or "image/jpeg"
+    data_url = f"data:{media_type};base64,{b64}"
+
+    payload = {
+        "model": OPENAI_MODEL,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": USER_PROMPT},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    start_time = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post("https://api.openai.com/v1/responses", headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        return {"error": f"OpenAI request failed: {e}"}
+
+    output_text = ""
+    if isinstance(data.get("output"), list):
+        parts = []
+        for item in data["output"]:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                cont = item.get("content")
+                if isinstance(cont, list):
+                    for c in cont:
+                        if isinstance(c, str):
+                            parts.append(c)
+                        elif isinstance(c, dict) and c.get("type") == "output_text":
+                            parts.append(c.get("text", ""))
+        output_text = "\n".join([p for p in parts if p])
+    if not output_text:
+        choices = data.get("choices") or []
+        txts = [c.get("text") for c in choices if isinstance(c, dict) and c.get("text")]
+        output_text = "\n".join(txts)
+    if not output_text:
+        output_text = json.dumps(data)
+
+    parsed = parse_model_output(output_text)
+    model_conf = parsed.get("confidence")
+    model_conf_pct = int(model_conf * 100) if model_conf is not None else None
+
+    return {
+        "output": output_text,
+        "parsed": parsed,
+        "model_confidence": model_conf,
+        "model_confidence_percent": model_conf_pct,
+        "processing_time_ms": int((time.time() - start_time) * 1000),
+        "raw_openai_response": data,
+    }
+
+
+async def call_remote_inference(file_bytes: bytes, filename: str, content_type: str) -> Dict[str, Any]:
+    if not REMOTE_INFERENCE_URL:
+        return {"error": "REMOTE_INFERENCE_URL is not configured"}
+
+    headers = {}
+    if REMOTE_INFERENCE_API_KEY:
+        headers["Authorization"] = f"Bearer {REMOTE_INFERENCE_API_KEY}"
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                REMOTE_INFERENCE_URL,
+                headers=headers,
+                files={"file": (filename, file_bytes, content_type or "image/jpeg")},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        return {"error": f"Remote inference failed: {e}"}
+
+    if isinstance(data, dict) and "analysis" in data:
+        return data
+
+    return {
+        "success": True,
+        "filename": filename,
+        "size_bytes": len(file_bytes),
+        "analysis": data,
+    }
+
+
+# ==========================
 # Routes
 # ==========================
 
 
 @app.post("/analyze-food")
-async def analyze_food(file: UploadFile = File(...)) -> Dict:
+async def analyze_food(
+    file: UploadFile = File(...),
+    inference_mode: str = Form("local"),
+) -> Dict:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
@@ -236,7 +406,62 @@ async def analyze_food(file: UploadFile = File(...)) -> Dict:
         raise HTTPException(status_code=400, detail="File exceeds 10MB limit")
 
     image = _prepare_image(contents)
-    return _analyze_prepared_image(image, file.filename, file_size)
+    filename = file.filename or "uploaded"
+    mode = (inference_mode or "local").lower().strip()
+
+    if mode == "openai" or (mode in ("api", "remote") and OPENAI_API_KEY):
+        result = await call_openai_inference(contents, filename, file.content_type)
+        if result.get("error"):
+            raise HTTPException(status_code=502, detail=result["error"])
+        generation = result
+    elif mode in ("api", "remote") and REMOTE_INFERENCE_URL:
+        result = await call_remote_inference(contents, filename, file.content_type)
+        if result.get("error"):
+            raise HTTPException(status_code=502, detail=result["error"])
+        generation = result.get("analysis", result)
+    else:
+        generation = _run_generation(image)
+
+    detected_foods = []
+    parsed = generation.get("parsed")
+    if parsed:
+        detected_foods.append({
+            "name": parsed.get("dish") or "Unknown",
+            "confidence": parsed.get("confidence") or 0.5,
+            "calories": parsed.get("calories"),
+            "protein_g": parsed.get("protein_g"),
+            "carbs_g": parsed.get("carbs_g"),
+            "fat_g": parsed.get("fat_g"),
+        })
+
+    total_nutrition = None
+    if detected_foods:
+        total_cal = sum(f.get("calories") or 0 for f in detected_foods)
+        total_pro = sum(f.get("protein_g") or 0 for f in detected_foods)
+        total_carbs = sum(f.get("carbs_g") or 0 for f in detected_foods)
+        total_fat = sum(f.get("fat_g") or 0 for f in detected_foods)
+        if any([total_cal, total_pro, total_carbs, total_fat]):
+            total_nutrition = {
+                "calories": total_cal,
+                "protein_g": total_pro,
+                "carbs_g": total_carbs,
+                "fat_g": total_fat,
+            }
+
+    return {
+        "success": True,
+        "filename": filename,
+        "size_bytes": file_size,
+        "analysis": {
+            "output": generation.get("output"),
+            "detected_foods": detected_foods,
+            "total_nutrition": total_nutrition,
+            "model_confidence": generation.get("model_confidence"),
+            "model_confidence_percent": generation.get("model_confidence_percent"),
+            "processing_time_ms": generation.get("processing_time_ms"),
+            "model_version": MODEL_NAME,
+        },
+    }
 
 
 @app.get("/health")
